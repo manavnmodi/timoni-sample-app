@@ -1,6 +1,6 @@
 values: {
 	image: {
-	    repository: "docker.io/nginx"
+	    repository: "manav23/nodeserver"
 		tag:        "1.29.6"
 		digest:     ""
 		pullPolicy: "IfNotPresent"
