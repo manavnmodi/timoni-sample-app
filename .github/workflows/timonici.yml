@@ -50,7 +50,7 @@ jobs:
         if: steps.check.outputs.is_bot == 'false' || steps.check.outputs.only_image_cue == 'false'
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.DEPLOY_REPO_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           branch: review/${{ github.sha }}
           base: prod
           title: "Review Required: Changes by ${{ github.actor }}"
