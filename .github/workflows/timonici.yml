@@ -23,31 +23,42 @@ jobs:
           COMMITTER_EMAIL=$(git log -1 --format='%ae')
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
 
-          echo "Committer: $COMMITTER_EMAIL"
-          echo "Changed files: $CHANGED_FILES"
+          echo "Committer Email : $COMMITTER_EMAIL"
+          echo "Changed Files   : $CHANGED_FILES"
+
+          IS_BOT=false
+          ONLY_IMAGE_CUE=false
 
           # Check if bot
           if [[ "$COMMITTER_EMAIL" == "github-actions[bot]@users.noreply.github.com" ]]; then
-            echo "is_bot=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_bot=false" >> $GITHUB_OUTPUT
+            IS_BOT=true
           fi
 
           # Check if only image.cue changed
           if [[ "$CHANGED_FILES" == "image.cue" ]]; then
-            echo "only_image_cue=true" >> $GITHUB_OUTPUT
-          else
-            echo "only_image_cue=false" >> $GITHUB_OUTPUT
+            ONLY_IMAGE_CUE=true
           fi
 
-      # Bot + image.cue → Skip
-      - name: Skip
-        if: steps.check.outputs.is_bot == 'true' && steps.check.outputs.only_image_cue == 'true'
-        run: echo " Bot changed image.cue — skipping, ArgoCD will handle it."
+          echo "is_bot=$IS_BOT"
+          echo "only_image_cue=$ONLY_IMAGE_CUE"
 
-      #  Human or other file → Create PR
+          # Final decision
+          if [[ "$IS_BOT" == "true" && "$ONLY_IMAGE_CUE" == "true" ]]; then
+            echo "action=skip" >> $GITHUB_OUTPUT
+          else
+            echo "action=pr" >> $GITHUB_OUTPUT
+          fi
+
+      # ✅ Bot + only image.cue → Skip
+      - name: Skip
+        if: steps.check.outputs.action == 'skip'
+        run: |
+          echo "✅ Bot changed only image.cue — skipping."
+          echo "🔁 ArgoCD webhook will handle the Timoni build."
+
+      # 🔀 Anything else → Create PR
       - name: Create Pull Request
-        if: steps.check.outputs.is_bot == 'false' || steps.check.outputs.only_image_cue == 'false'
+        if: steps.check.outputs.action == 'pr'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
