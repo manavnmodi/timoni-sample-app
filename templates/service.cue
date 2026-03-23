@@ -7,7 +7,7 @@ import (
 #Service: corev1.#Service & {
 	#config:    #Config
 	apiVersion: "v1"
-	kind:       "Services"
+	kind:       "Service"
 	metadata: {
 		name:      #config.serviceName
 		namespace: #config.metadata.namespace
