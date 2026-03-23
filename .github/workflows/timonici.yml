@@ -1,0 +1,58 @@
+name: Review Gate
+
+on:
+  push:
+    branches: [prod]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check Committer and Changed Files
+        id: check
+        run: |
+          COMMITTER_EMAIL=$(git log -1 --format='%ae')
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+
+          echo "Committer: $COMMITTER_EMAIL"
+          echo "Changed files: $CHANGED_FILES"
+
+          # Check if bot
+          if [[ "$COMMITTER_EMAIL" == "github-actions[bot]@users.noreply.github.com" ]]; then
+            echo "is_bot=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_bot=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check if only image.cue changed
+          if [[ "$CHANGED_FILES" == "image.cue" ]]; then
+            echo "only_image_cue=true" >> $GITHUB_OUTPUT
+          else
+            echo "only_image_cue=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Bot + image.cue → Skip
+      - name: Skip
+        if: steps.check.outputs.is_bot == 'true' && steps.check.outputs.only_image_cue == 'true'
+        run: echo " Bot changed image.cue — skipping, ArgoCD will handle it."
+
+      #  Human or other file → Create PR
+      - name: Create Pull Request
+        if: steps.check.outputs.is_bot == 'false' || steps.check.outputs.only_image_cue == 'false'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.DEPLOY_REPO_TOKEN }}
+          branch: review/${{ github.sha }}
+          base: prod
+          title: "Review Required: Changes by ${{ github.actor }}"
+          body: "Non-bot commit or non-image.cue file changed. Please review before merge."
+          reviewers: manavnmodi111
