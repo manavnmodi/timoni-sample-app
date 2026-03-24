@@ -2,7 +2,7 @@ values: {
 	image: {
 	    repository: "manav23/nodeserver"
 		tag: "latest"
-		digest: "sha256:0329ca75ea036e400540946db08a434456b39ae9b93c9da4bd4b507c7876533a"
+		digest: "sha256:e9b3b77812dadf8ea30cb0fe8be960b24e6adb89b08f77e742d4e27148b4ea32"
 		pullPolicy: "IfNotPresent"
 	}
 }
