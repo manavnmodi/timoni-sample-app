@@ -29,48 +29,30 @@ jobs:
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
 
           FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
-          ONLY_FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
+          FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
 
-          IS_BOT=false
-          ONLY_IMAGE_CUE=false
+          echo "Author: $PR_AUTHOR"
+          echo "File count: $FILE_COUNT"
+          echo "File: $FILE"
 
-          [[ "$PR_AUTHOR" == *"[bot]"* ]] && IS_BOT=true
-          [[ "$FILE_COUNT" == "1" && "$ONLY_FILE" == "image.cue" ]] && ONLY_IMAGE_CUE=true
-
-          if [[ "$IS_BOT" == "true" && "$ONLY_IMAGE_CUE" == "true" ]]; then
-            echo "action=auto_merge" >> $GITHUB_OUTPUT
+          if [[ "$PR_AUTHOR" == *"[bot]"* && "$FILE_COUNT" == "1" && "$FILE" == "image.cue" ]]; then
+            echo "auto=true" >> $GITHUB_OUTPUT
           else
-            echo "action=require_review" >> $GITHUB_OUTPUT
+            echo "auto=false" >> $GITHUB_OUTPUT
           fi
 
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
-      # Generate token for reviewer app
-      - name: Generate Reviewer App Token
-        id: reviewer-token
-        if: steps.classify.outputs.action == 'auto_merge'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.REVIEW_APP_ID }}
-          private-key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      # Approve PR using SECOND APP
-      - name: Auto Approve PR
-        if: steps.classify.outputs.action == 'auto_merge'
+      # Block invalid PR
+      - name: Block PR
+        if: steps.classify.outputs.auto == 'false'
         run: |
-          echo "Approving PR with reviewer app..."
-      
-          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
-            -H "Authorization: Bearer ${{ steps.reviewer-token.outputs.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews \
-            -d '{"event":"APPROVE"}')
-          echo "$RESPONSE"
+          echo "Manual review required"
+          exit 1
 
-      # Enable auto merge
+      #  Auto merge valid PR
       - name: Enable Auto Merge
-        if: steps.classify.outputs.action == 'auto_merge'
+        if: steps.classify.outputs.auto == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
