@@ -1,69 +1,71 @@
 name: Review Gate
 
 on:
-  push:
+  pull_request:
     branches: [prod]
+    types: [opened, synchronize, reopened]
 
 jobs:
-  check:
+  review-gate:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Check Committer and Changed Files
-        id: check
+      - name: Classify PR
+        id: classify
         run: |
-          COMMITTER_EMAIL=$(git log -1 --format='%ae')
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
 
-          echo "Committer Email : $COMMITTER_EMAIL"
-          echo "Changed Files   : $CHANGED_FILES"
+          FILES_JSON=$(curl -s \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
+
+          FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
+          ONLY_FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
 
           IS_BOT=false
           ONLY_IMAGE_CUE=false
 
-          # Check if bot
-          if [[ "$COMMITTER_EMAIL" == "github-actions[bot]@users.noreply.github.com" ]]; then
-            IS_BOT=true
-          fi
+          [[ "$PR_AUTHOR" == *"[bot]"* ]] && IS_BOT=true
+          [[ "$FILE_COUNT" == "1" && "$ONLY_FILE" == "image.cue" ]] && ONLY_IMAGE_CUE=true
 
-          # Check if only image.cue changed
-          if [[ "$CHANGED_FILES" == "image.cue" ]]; then
-            ONLY_IMAGE_CUE=true
-          fi
-
-          echo "is_bot=$IS_BOT"
-          echo "only_image_cue=$ONLY_IMAGE_CUE"
-
-          # Final decision
           if [[ "$IS_BOT" == "true" && "$ONLY_IMAGE_CUE" == "true" ]]; then
-            echo "action=skip" >> $GITHUB_OUTPUT
+            echo "action=auto_merge" >> $GITHUB_OUTPUT
           else
-            echo "action=pr" >> $GITHUB_OUTPUT
+            echo "action=require_review" >> $GITHUB_OUTPUT
           fi
 
-      # ✅ Bot + only image.cue → Skip
-      - name: Skip
-        if: steps.check.outputs.action == 'skip'
-        run: |
-          echo "✅ Bot changed only image.cue — skipping."
-          echo "🔁 ArgoCD webhook will handle the Timoni build."
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
 
-      # 🔀 Anything else → Create PR
-      - name: Create Pull Request
-        if: steps.check.outputs.action == 'pr'
-        uses: peter-evans/create-pull-request@v6
+      - name: Auto Approve
+        if: steps.classify.outputs.action == 'auto_merge'
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+      - name: Enable Auto Merge
+        if: steps.classify.outputs.action == 'auto_merge'
+        uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: review/${{ github.sha }}
-          base: prod
-          title: "Review Required: Changes by ${{ github.actor }}"
-          body: "Non-bot commit or non-image.cue file changed. Please review before merge."
-          reviewers: manavnmodi111
+          pull-request-number: ${{ steps.classify.outputs.pr_number }}
+
+      - name: Request Review
+        if: steps.classify.outputs.action == 'require_review'
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/requested_reviewers \
+            -d '{"reviewers":["manavnmodi111"]}'
