@@ -14,6 +14,7 @@ jobs:
       pull-requests: write
 
     steps:
+      # Classify PR
       - name: Classify PR
         id: classify
         run: |
@@ -43,30 +44,32 @@ jobs:
           fi
 
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
 
-      - name: Auto Approve
+      # Generate token for reviewer app
+      - name: Generate Reviewer App Token
+        id: reviewer-token
+        if: steps.classify.outputs.action == 'auto_merge'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.REVIEW_APP_ID }}
+          private-key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      # Approve PR using SECOND APP
+      - name: Auto Approve PR
         if: steps.classify.outputs.action == 'auto_merge'
         run: |
+          echo "Approving PR with reviewer app..."
           curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: Bearer ${{ steps.reviewer-token.outputs.token }}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews \
-            -d '{"event":"APPROVE"}'
+            -d '{"event":"APPROVE","body":"Auto-approved (bot image.cue change)"}'
 
+      # Enable auto merge
       - name: Enable Auto Merge
         if: steps.classify.outputs.action == 'auto_merge'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           pull-request-number: ${{ steps.classify.outputs.pr_number }}
-
-      - name: Auto Approve PR
-        if: steps.classify.outputs.action == 'auto_merge'
-        run: |
-          echo "Auto approving PR..."
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews \
-            -d '{"event":"APPROVE"}'
