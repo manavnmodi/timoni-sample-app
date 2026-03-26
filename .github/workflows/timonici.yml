@@ -4,17 +4,37 @@ on:
   pull_request:
     branches: [prod]
     types: [opened, synchronize, reopened]
+# Triggers only when a PR targets prod.
+# opened      = new PR created
+# synchronize = new commit pushed to existing PR branch
+# reopened    = previously closed PR reopened
 
 jobs:
   review-gate:
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write       # required to merge
+      pull-requests: write  # required to approve + comment
 
     steps:
-      # Classify PR
+
+      # ── BLOCK 1: Resolve exact bot login from repository variable ──
+      # vars.TIMONI_APP_SLUG is a non-sensitive repository variable
+      # (not a secret) set in timoni-sample-app repo settings.
+      # GitHub App bots always login as: <app-slug>[bot]
+      # Using vars instead of secrets because app slug is not a credential.
+      - name: Resolve Bot Login
+        id: bot
+        run: |
+          BOT_LOGIN="${{ vars.TIMONI_APP_SLUG }}[bot]"
+          echo "login=${BOT_LOGIN}" >> $GITHUB_OUTPUT
+          echo "Resolved bot login: $BOT_LOGIN"
+
+      # ── BLOCK 2: Classify PR ───────────────────────────────────────
+      # Three conditions must ALL be true for auto-merge:
+      # 1. PR author matches exactly YOUR bot login — not any [bot]
+      # 2. Exactly 1 file changed — no extra files sneak through
+      # 3. That file is image.cue — only digest updates auto-merge
       - name: Classify PR
         id: classify
         run: |
@@ -22,38 +42,74 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          BOT_LOGIN="${{ steps.bot.outputs.login }}"
 
+          echo "PR Author  : $PR_AUTHOR"
+          echo "Allowed Bot: $BOT_LOGIN"
+          echo "PR Number  : $PR_NUMBER"
+
+          # Fetch changed files via GitHub REST API — no gh CLI needed
           FILES_JSON=$(curl -s \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
 
           FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
-          FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
+          FILE=$(echo "$FILES_JSON"      | jq -r '.[0].filename // ""')
 
-          echo "Author: $PR_AUTHOR"
-          echo "File count: $FILE_COUNT"
-          echo "File: $FILE"
+          echo "File count : $FILE_COUNT"
+          echo "File name  : $FILE"
 
-          if [[ "$PR_AUTHOR" == *"[bot]"* && "$FILE_COUNT" == "1" && "$FILE" == "image.cue" ]]; then
+          if [[ "$PR_AUTHOR" == "$BOT_LOGIN" && \
+                "$FILE_COUNT" == "1"          && \
+                "$FILE"       == "image.cue" ]]; then
             echo "auto=true" >> $GITHUB_OUTPUT
+            echo "✅ All checks passed — queuing auto-merge"
           else
             echo "auto=false" >> $GITHUB_OUTPUT
+            echo "❌ Blocked — author=$PR_AUTHOR | files=$FILE_COUNT | file=$FILE"
           fi
 
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
-      # Block invalid PR
-      - name: Block PR
-        if: steps.classify.outputs.auto == 'false'
+      # ── BLOCK 3: Approve the PR ────────────────────────────────────
+      # Branch protection requires 1 approval before merge.
+      # GITHUB_TOKEN (github-actions[bot]) approves the PR opened
+      # by your GitHub App bot — two different actors, GitHub allows it.
+      # Without this step, auto-merge queues but never executes because
+      # the required approval is never satisfied.
+      - name: Auto-approve PR
+        if: steps.classify.outputs.auto == 'true'
         run: |
-          echo "Manual review required"
-          exit 1
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews" \
+            -d '{"event":"APPROVE","body":"✅ Auto-approved by Review Gate — verified bot + image.cue only."}'
 
-      #  Auto merge valid PR
-      - name: Enable Auto Merge
+      # ── BLOCK 4: Enable auto-merge ─────────────────────────────────
+      # Queues the merge once ALL branch protection conditions are met:
+      # - required approval    → satisfied by Block 3 above
+      # - required status check → satisfied when this job completes ✅
+      # GitHub then merges automatically — no manual trigger needed.
+      # merge-method: merge preserves full commit history.
+      # Change to squash if you want a cleaner log in timoni-sample-app.
+      - name: Enable Auto-merge
         if: steps.classify.outputs.auto == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token:               ${{ secrets.GITHUB_TOKEN }}
           pull-request-number: ${{ steps.classify.outputs.pr_number }}
+          merge-method:        merge
+
+      # ── BLOCK 5: Block everything else ────────────────────────────
+      # exit 1 fails the "review-gate" required status check.
+      # Branch protection sees a failed required check → merge button
+      # is disabled for everyone including admins (if bypass is off).
+      # PR stays open until a human manually reviews and approves it.
+      - name: Block PR
+        if: steps.classify.outputs.auto == 'false'
+        run: |
+          echo "❌ Manual review required."
+          echo "Reason: author is not the expected bot, or files other than image.cue changed."
+          exit 1
