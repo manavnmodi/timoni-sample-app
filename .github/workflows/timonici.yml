@@ -8,20 +8,13 @@ on:
 jobs:
   review-gate:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-
-      # ── BLOCK 1: Classify PR ───────────────────────────────────────
-      # Builds the bot login inline using == comparison directly.
-      # Avoids writing [bot] to GITHUB_OUTPUT entirely — that was
-      # causing "Invalid format '[bot]'" from GitHub's output parser.
-      # Three conditions must ALL pass for auto-merge:
-      # 1. PR author is exactly YOUR app bot — not any random bot
-      # 2. Exactly 1 file changed
-      # 3. That file is image.cue
+      # Classify PR
       - name: Classify PR
         id: classify
         run: |
@@ -29,71 +22,46 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
-
-          # Build bot login inline — never written to GITHUB_OUTPUT
-          # so [bot] never hits the output file parser
-          ALLOWED_BOT="${{ vars.TIMONI_APP_SLUG }}[bot]"
-
-          echo "PR Author  : $PR_AUTHOR"
-          echo "Allowed Bot: $ALLOWED_BOT"
-          echo "PR Number  : $PR_NUMBER"
-
-          # Fetch changed files via GitHub REST API
+      
           FILES_JSON=$(curl -s \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
-
+      
           FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
-          FILE=$(echo "$FILES_JSON"      | jq -r '.[0].filename // ""')
-
-          echo "File count : $FILE_COUNT"
-          echo "File name  : $FILE"
-
-          if [[ "$PR_AUTHOR" == "$ALLOWED_BOT" && \
-                "$FILE_COUNT" == "1"            && \
-                "$FILE"       == "image.cue" ]]; then
-            echo "auto=true"          >> $GITHUB_OUTPUT
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-            echo "✅ Auto-merge approved"
+          FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
+      
+          echo "Author: $PR_AUTHOR"
+          echo "File count: $FILE_COUNT"
+          echo "File: $FILE"
+      
+          # Strict bot check
+          if [[ "$PR_AUTHOR" == "timoni-github-app[bot]" && "$FILE_COUNT" == "1" && "$FILE" == "image.cue" ]]; then
+            
+            # OPTIONAL: Validate content (extra security)
+            curl -s \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files" \
+              | jq -r '.[0].patch' | grep "digest:" || exit 1
+      
+            echo "auto=true" >> $GITHUB_OUTPUT
           else
-            echo "auto=false"         >> $GITHUB_OUTPUT
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-            echo "❌ Blocked — author=$PR_AUTHOR | files=$FILE_COUNT | file=$FILE"
+            echo "auto=false" >> $GITHUB_OUTPUT
           fi
+      
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
-      # ── BLOCK 2: Approve the PR ────────────────────────────────────
-      # GITHUB_TOKEN (github-actions[bot]) approves the PR opened by
-      # your GitHub App bot — two different actors, GitHub allows it.
-      # Required because branch protection needs 1 approval.
-      # Without this, auto-merge queues but never executes.
-      - name: Auto-approve PR
-        if: steps.classify.outputs.auto == 'true'
-        run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.classify.outputs.pr_number }}/reviews" \
-            -d '{"event":"APPROVE","body":"Auto-approved by Review Gate — verified bot and image.cue only."}'
-
-      # ── BLOCK 3: Queue auto-merge ──────────────────────────────────
-      # Merges automatically once ALL branch protection conditions pass:
-      # - 1 approval         → satisfied by Block 2
-      # - review-gate check  → satisfied when this job completes
-      - name: Enable Auto-merge
-        if: steps.classify.outputs.auto == 'true'
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token:               ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ steps.classify.outputs.pr_number }}
-          merge-method:        merge
-
-      # ── BLOCK 4: Block everything else ────────────────────────────
-      # exit 1 fails the required "review-gate" status check.
-      # Branch protection blocks merge until a human approves.
+      # Block invalid PR
       - name: Block PR
         if: steps.classify.outputs.auto == 'false'
         run: |
-          echo "❌ Manual review required."
-          echo "Not the expected bot, or files other than image.cue changed."
+          echo "Manual review required"
           exit 1
+
+      #  Auto merge valid PR
+      - name: Enable Auto Merge
+        if: steps.classify.outputs.auto == 'true'
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ steps.classify.outputs.pr_number }}
