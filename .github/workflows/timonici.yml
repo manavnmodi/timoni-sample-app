@@ -42,34 +42,31 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          BOT_LOGIN="${{ steps.bot.outputs.login }}"
-
-          echo "PR Author  : $PR_AUTHOR"
-          echo "Allowed Bot: $BOT_LOGIN"
-          echo "PR Number  : $PR_NUMBER"
-
-          # Fetch changed files via GitHub REST API — no gh CLI needed
+      
+          # Use steps output directly — not via shell variable
+          ALLOWED_BOT="${{ steps.bot.outputs.login }}"
+      
           FILES_JSON=$(curl -s \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
-
+      
           FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
           FILE=$(echo "$FILES_JSON"      | jq -r '.[0].filename // ""')
-
+      
+          echo "PR Author  : $PR_AUTHOR"
+          echo "Allowed Bot: $ALLOWED_BOT"
           echo "File count : $FILE_COUNT"
-          echo "File name  : $FILE"
-
-          if [[ "$PR_AUTHOR" == "$BOT_LOGIN" && \
-                "$FILE_COUNT" == "1"          && \
+          echo "File       : $FILE"
+      
+          if [[ "$PR_AUTHOR" == "$ALLOWED_BOT" && \
+                "$FILE_COUNT" == "1"            && \
                 "$FILE"       == "image.cue" ]]; then
             echo "auto=true" >> $GITHUB_OUTPUT
-            echo "✅ All checks passed — queuing auto-merge"
           else
             echo "auto=false" >> $GITHUB_OUTPUT
-            echo "❌ Blocked — author=$PR_AUTHOR | files=$FILE_COUNT | file=$FILE"
           fi
-
+      
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       # ── BLOCK 3: Approve the PR ────────────────────────────────────
