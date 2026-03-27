@@ -6,7 +6,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  review-gate:
+  review-gate1:
     runs-on: ubuntu-latest
 
     permissions:
