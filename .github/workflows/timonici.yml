@@ -3,6 +3,6 @@ on:
   pull_request:
     branches: [prod]
 jobs:
-  review:
+  review-gate:
     uses: manavnmodi/.github/.github/workflows/review-gate.yml@main
     secrets: inherit
