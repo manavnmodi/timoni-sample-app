@@ -6,8 +6,8 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  review-gate1:
-    name: review-gate1
+  review-gate:
+    name: review-gate
     runs-on: ubuntu-latest
 
     permissions:
