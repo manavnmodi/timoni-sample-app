@@ -5,5 +5,5 @@ on:
     branches: [prod]
 
 jobs:
-  review-gate:
+  review:
     uses: manavnmodi/.github/.github/workflows/review-gate.yml@main
