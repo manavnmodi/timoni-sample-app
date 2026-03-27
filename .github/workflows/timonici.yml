@@ -1,9 +1,8 @@
 name: review-gate
-
 on:
   pull_request:
     branches: [prod]
-
 jobs:
   review:
     uses: manavnmodi/.github/.github/workflows/review-gate.yml@main
+    secrets: inherit
