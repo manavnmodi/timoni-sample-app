@@ -1,67 +1,82 @@
 name: Review Gate
- 
+
 on:
   pull_request:
-    branches: [prod]
+    branches: ["prod"]
     types: [opened, synchronize, reopened]
- 
+
 jobs:
   review-gate:
+    name: Validate and Auto-Merge
     runs-on: ubuntu-latest
- 
+    
+    # Strictly scope permissions. Write access is needed to approve and merge.
     permissions:
       contents: write
       pull-requests: write
- 
+
     steps:
-      # Classify PR
-      - name: Classify PR
+      # Step 1: Checkout the code
+      - name: Checkout Repository
+        uses: actions/checkout@v6 
+
+      # Step 2: Check files and author using GitHub's Official Script Action
+      - name: Classify PR changes
         id: classify
-        run: |
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-      
-          FILES_JSON=$(curl -s \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files")
-      
-          FILE_COUNT=$(echo "$FILES_JSON" | jq 'length')
-          FILE=$(echo "$FILES_JSON" | jq -r '.[0].filename // ""')
-      
-          echo "Author: $PR_AUTHOR"
-          echo "File count: $FILE_COUNT"
-          echo "File: $FILE"
-      
-          # Strict bot check
-          if [[ "$PR_AUTHOR" == "timoni-github-app[bot]" && "$FILE_COUNT" == "1" && "$FILE" == "image.cue" ]]; then
-            
-            # OPTIONAL: Validate content (extra security)
-            curl -s \
-              -H "Authorization: Bearer ${TOKEN}" \
-              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files" \
-              | jq -r '.[0].patch' | grep "digest:" || exit 1
-      
-            echo "auto=true" >> $GITHUB_OUTPUT
-          else
-            echo "auto=false" >> $GITHUB_OUTPUT
-          fi
-      
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
- 
-      # # Block invalid PR
-      # - name: Block PR
-      #   if: steps.classify.outputs.auto == 'false'
-      #   run: |
-      #     echo "Manual review required"
-      #     exit 1
- 
-      #  Auto merge valid PR
-      - name: Enable Auto Merge
-        if: steps.classify.outputs.auto == 'true'
-        uses: peter-evans/enable-pull-request-automerge@v3
+        uses: actions/github-script@v8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ steps.classify.outputs.pr_number }}
+          script: |
+            // Fetch the list of files changed in this specific PR
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const prAuthor = context.payload.pull_request.user.login;
+            const changedFiles = files.map(f => f.filename);
+            
+            // Define strict conditions
+            const isBot = prAuthor === 'timoni-github-app[bot]';
+            const onlyImageCue = changedFiles.length === 1 && changedFiles[0] === 'image.cue';
+
+            // Output the result
+            if (isBot && onlyImageCue) {
+              console.log("Verdict: Safe Automated Update");
+              core.setOutput('auto', 'true');
+            } else {
+              console.log("Verdict: Manual Review Required");
+              core.setOutput('auto', 'false');
+            }
+
+      # Step 3: Auto-approve the PR using the GitHub API
+      - name: Approve Bot PR
+        if: steps.classify.outputs.auto == 'true'
+        uses: actions/github-script@v8 
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'APPROVE',
+              body: 'Automated approval: This PR only updates the image digest.'
+            });
+
+      # Step 4: Enable Auto-Merge using native GitHub CLI (gh)
+      - name: Enable Auto-Merge
+        if: steps.classify.outputs.auto == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # The GitHub CLI is pre-installed on ubuntu-latest runners
+          gh pr merge --auto --squash "$PR_URL"
+
+      # Step 5: Fail the job for human PRs to block merging
+      - name: Block Manual PR
+        if: steps.classify.outputs.auto == 'false'
+        run: |
+          echo "::error::This PR contains manual changes or is not from the authorized deployment bot."
+          echo "Manual review and approval from the team is required before merging."
+          exit 1
