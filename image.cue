@@ -6,3 +6,4 @@ values: {
 		pullPolicy: "IfNotPresent"
 	}
 }
+
