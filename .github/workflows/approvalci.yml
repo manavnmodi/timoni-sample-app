@@ -3,7 +3,6 @@ name: Review Gate
 on:
   pull_request:
     branches: ["prod"]
-    # types: [opened]
 
 jobs:
   review-gate:
@@ -37,7 +36,7 @@ jobs:
               core.setOutput('auto', 'false');
             }
 
-      # NEW: Generate the token for the app that has bypass permissions
+      # NEW: Generate the token for the app
       - name: Generate GitHub App Token
         if: steps.classify.outputs.auto == 'true'
         id: app-token
@@ -48,8 +47,8 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      # NEW: Merge using the App Token and the --admin bypass flag
-      - name: Force Merge (Bypass CODEOWNERS)
+      # NEW: Merge using the App Token
+      - name: Force Merge
         if: steps.classify.outputs.auto == 'true'
         env:
           # Use the App token, NOT the default GITHUB_TOKEN
