@@ -3,30 +3,22 @@ name: Review Gate
 on:
   pull_request:
     branches: ["prod"]
-    types: [opened, synchronize, reopened]
+    # types: [opened]
 
 jobs:
   review-gate:
     name: Validate and Auto-Merge
     runs-on: ubuntu-latest
-    
-    # Strictly scope permissions. Write access is needed to approve and merge.
-    permissions:
-      contents: write
-      pull-requests: write
 
     steps:
-      # Step 1: Checkout the code
       - name: Checkout Repository
-        uses: actions/checkout@v6 
+        uses: actions/checkout@v6
 
-      # Step 2: Check files and author using GitHub's Official Script Action
       - name: Classify PR changes
         id: classify
         uses: actions/github-script@v8
         with:
           script: |
-            // Fetch the list of files changed in this specific PR
             const { data: files } = await github.rest.pulls.listFiles({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -36,47 +28,40 @@ jobs:
             const prAuthor = context.payload.pull_request.user.login;
             const changedFiles = files.map(f => f.filename);
             
-            // Define strict conditions
             const isBot = prAuthor === 'timoni-github-app[bot]';
             const onlyImageCue = changedFiles.length === 1 && changedFiles[0] === 'image.cue';
 
-            // Output the result
             if (isBot && onlyImageCue) {
-              console.log("Verdict: Safe Automated Update");
               core.setOutput('auto', 'true');
             } else {
-              console.log("Verdict: Manual Review Required");
               core.setOutput('auto', 'false');
             }
 
-      # Step 3: Auto-approve the PR using the GitHub API
-      - name: Approve Bot PR
+      # NEW: Generate the token for the app that has bypass permissions
+      - name: Generate GitHub App Token
         if: steps.classify.outputs.auto == 'true'
-        uses: actions/github-script@v8 
+        id: app-token
+        uses: actions/create-github-app-token@v1
         with:
-          script: |
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'APPROVE',
-              body: 'Automated approval: This PR only updates the image digest.'
-            });
+          app-id: ${{ secrets.TIMONI_APP_ID }}
+          private-key: ${{ secrets.TIMONI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
-      # Step 4: Enable Auto-Merge using native GitHub CLI (gh)
-      - name: Enable Auto-Merge
+      # NEW: Merge using the App Token and the --admin bypass flag
+      - name: Force Merge (Bypass CODEOWNERS)
         if: steps.classify.outputs.auto == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the App token, NOT the default GITHUB_TOKEN
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          # The GitHub CLI is pre-installed on ubuntu-latest runners
-          gh pr merge --auto --squash "$PR_URL"
+          # The --admin flag tells GitHub to use the bypass privileges
+          gh pr merge "$PR_URL" --squash --admin
 
-      # Step 5: Fail the job for human PRs to block merging
       - name: Block Manual PR
         if: steps.classify.outputs.auto == 'false'
         run: |
-          echo "::error::This PR contains manual changes or is not from the authorized deployment bot."
-          echo "Manual review and approval from the team is required before merging."
+          echo "::error::This PR contains manual changes or is not from the authorized bot."
+          echo "Manual Code Owner review is required before merging."
           exit 1
